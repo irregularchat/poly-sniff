@@ -98,7 +98,7 @@ Detect suspicious insider trading patterns on a specific market:
 # Basic analysis — prints flagged users to terminal
 poly_sniff analyze will-x-happen-by-date
 
-# Legacy syntax also works
+# Legacy syntax also works (slug found after /event/ in market URL)
 poly_sniff will-x-happen-by-date
 
 # Scrape top 50 No-side holders, flag only those who bet on the winning side
@@ -111,6 +111,8 @@ poly_sniff analyze will-x-happen-by-date --min-directional 0.75 --min-dominant 0
 poly_sniff analyze will-x-happen-by-date --export-all
 ```
 
+The market slug is found after `/event/` in the Polymarket URL, e.g. `polymarket.com/event/will-x-happen-by-date`.
+
 #### Analyze options
 
 | Flag | Default | Description |
@@ -119,14 +121,14 @@ poly_sniff analyze will-x-happen-by-date --export-all
 | `--position-side` | `Yes` | Which side's top position holders to scrape. |
 | `--limit` | `20` | Number of top position holders to scrape. |
 | `--late-window` | `24` | Hours before resolution that count as "late" trading. |
-| `--min-directional` | `0.85` | Minimum userDirectionalConsistency to flag. |
-| `--min-dominant` | `0.90` | Minimum userDominantSideRatio to flag. |
-| `--max-conviction` | `0` | Maximum userPriceConvictionScore to flag. |
-| `--min-late-volume` | `0.50` | Minimum lateVolumeRatio to flag. |
-| `--export-profiles` | — | Export user profiles to xlsx. |
-| `--export-transactions` | — | Export transaction data to xlsx. |
-| `--export-scaffold` | — | Export hourly scaffold to xlsx. |
-| `--export-flagged` | — | Export flagged users with all metrics to xlsx. |
+| `--min-directional` | `0.85` | Minimum Directional Consistency to flag. |
+| `--min-dominant` | `0.90` | Minimum Dominant Side Ratio to flag. |
+| `--max-conviction` | `0` | Maximum Price Conviction Score to flag. |
+| `--min-late-volume` | `0.50` | Minimum Late Volume Ratio to flag. |
+| `--export-profiles` | — | Export user profiles to `profiles.xlsx`. |
+| `--export-transactions` | — | Export transaction data to `transactions.xlsx`. |
+| `--export-scaffold` | — | Export hourly scaffold to `scaffold.xlsx`. |
+| `--export-flagged` | — | Export flagged users with all metrics to `flagged_users.xlsx`. |
 | `--export-all` | — | Export all four xlsx files. |
 
 ## How search works
@@ -143,9 +145,9 @@ The search pipeline has four stages:
 
 ## How insider detection works
 
-poly_sniff pulls the top position holders for a market, retrieves their full transaction histories, and runs four behavioral metrics against each user. Users who trip *all four* thresholds simultaneously are flagged.
+poly_sniff pulls the top position holders for a market, retrieves their full transaction histories within that market, and runs four behavioral metrics against each user.
 
-The core idea: an insider doesn't hedge, doesn't follow the crowd, and tends to act late.
+Users are flagged through a conjunctive filter — all four conditions must be satisfied simultaneously. A user who passes only two or three criteria is not flagged. The core idea: an insider doesn't hedge, doesn't follow the crowd, and tends to act late.
 
 ### Detection metrics
 
@@ -156,7 +158,9 @@ The core idea: an insider doesn't hedge, doesn't follow the crowd, and tends to 
 | **Price conviction score** | USDC-weighted avg of `(price - 0.50)` | Contrarian pricing. Negative = buying before market moves their way. |
 | **Late volume ratio** | Fraction of USDC in final hours | Timing. Insiders often act close to resolution when they confirm info. |
 
-When `--resolved-outcome` is provided, only users whose dominant side matches the winning outcome are flagged.
+All thresholds are configurable via CLI flags. Defaults live in `config.py`.
+
+When `--resolved-outcome` is provided, an additional filter is applied: only users whose dominant side matches the winning outcome are flagged (bullish for Yes, bearish for No). When omitted, users are flagged in both directions, which is useful for pre-resolution analysis.
 
 ## Architecture
 
