@@ -332,13 +332,23 @@ def fetch_market_prices(candidates: list[dict]) -> dict[str, dict]:
     return prices
 
 
+def _get_ai_tags(claims: list[str]) -> list[str]:
+    """Try to get AI-generated tag slugs. Returns empty list if unavailable."""
+    try:
+        from .ai_discovery import generate_smart_tags
+        return generate_smart_tags(claims)
+    except (ImportError, ValueError):
+        return []
+
+
 def search_markets(claims: list[str], limit_per_query: int = 10) -> list[dict]:
     """Search Polymarket for markets matching the given claims.
 
     Strategy:
     1. Extract entities from claims → search via Gamma tag_slug (most reliable)
-    2. Supplement with SearXNG keyword search (intermittent but broader)
-    3. Merge and deduplicate results
+    2. AI-generated smart tags → Gamma tag_slug (optional, needs OPENAI_API_KEY)
+    3. Supplement with SearXNG keyword search (intermittent but broader)
+    4. Merge and deduplicate results
     """
     seen_slugs = set()
     candidates = []
@@ -357,7 +367,23 @@ def search_markets(claims: list[str], limit_per_query: int = 10) -> list[dict]:
         if tag_results:
             print(f"  gamma tags   : {len(tag_results)} events")
 
-    # 2. SUPPLEMENT: SearXNG keyword search
+    # 2. AI SMART TAGS: GPT-generated tag slugs (optional)
+    ai_tags = _get_ai_tags(claims)
+    # Only search tags we haven't already searched
+    new_ai_tags = [t for t in ai_tags if t not in set(tag_slugs)]
+    if new_ai_tags:
+        print(f"  ai tags      : {', '.join(new_ai_tags)}")
+        ai_results = _search_via_gamma_tags(new_ai_tags[:4])
+        ai_count = 0
+        for c in ai_results:
+            if c['slug'] not in seen_slugs:
+                seen_slugs.add(c['slug'])
+                candidates.append(c)
+                ai_count += 1
+        if ai_count:
+            print(f"  ai discovery : +{ai_count} new events")
+
+    # 3. SUPPLEMENT: SearXNG keyword search
     searxng_queries = _build_searxng_queries(claims)
     searxng_count = 0
     for query in searxng_queries:

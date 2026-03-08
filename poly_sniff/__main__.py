@@ -131,7 +131,8 @@ def run_search(args: argparse.Namespace) -> None:
         if not candidates:
             return
 
-    # 3. Rank candidates — use best claim as primary, pass all for context
+    # 3. Rank candidates — cap at 25 for the ranker API, use best claim as primary
+    rank_candidates = candidates[:25] if len(candidates) > 25 else candidates
     primary_claim = args.claim or all_claims[0]
     # If primary claim looks like garbage (too short, URL-like), try next one
     if len(primary_claim) < 15 or primary_claim.startswith('http'):
@@ -139,8 +140,8 @@ def run_search(args: argparse.Namespace) -> None:
             if len(c) >= 15 and not c.startswith('http'):
                 primary_claim = c
                 break
-    print(f"\nRanking candidates by relevance...")
-    ranked = ranker.rank_candidates(primary_claim, candidates, all_claims=all_claims)
+    print(f"\nRanking {len(rank_candidates)} candidates by relevance...")
+    ranked = ranker.rank_candidates(primary_claim, rank_candidates, all_claims=all_claims)
 
     # Build slug→candidate lookup for enrichment
     candidate_map = {c['slug']: c for c in candidates}
