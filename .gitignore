@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking
+.mypy_cache/
+
+# Tool output
+output_*/
+
+# macOS
+.DS_Store
+
+#envvars
+.env
+
+# IDE
+.vscode/
+.idea/
+
+#miscellaneous
+CLAUDE.md

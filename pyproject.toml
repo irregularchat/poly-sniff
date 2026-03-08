@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools >= 65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "poly_sniff"
+version = "0.1.0"
+description = "Polymarket insider behavior detection tool"
+readme = "README.md"
+license = "MIT"
+requires-python = ">= 3.10"
+dependencies = [
+    "pandas",
+    "openpyxl",
+    "requests",
+    "tabulate",
+]
+
+[project.scripts]
+poly_sniff = "poly_sniff.__main__:main"
