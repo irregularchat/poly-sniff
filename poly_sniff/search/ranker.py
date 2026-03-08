@@ -26,9 +26,13 @@ def _tokenize(text: str) -> set[str]:
     return {_stem(w) for w in words if w not in _STOP_WORDS and len(w) > 2}
 
 
-def _keyword_fallback(claim: str, candidates: list[dict]) -> list[dict]:
+def _keyword_fallback(claim: str, candidates: list[dict], all_claims: list[str] = None) -> list[dict]:
     """Fuzzy keyword matching fallback when LLM ranking is unavailable."""
-    claim_tokens = _tokenize(claim)
+    # Combine all claims for broader matching
+    combined = claim
+    if all_claims:
+        combined = ' '.join([claim] + all_claims[:10])
+    claim_tokens = _tokenize(combined)
 
     results = []
     for c in candidates:
@@ -61,8 +65,17 @@ def _keyword_fallback(claim: str, candidates: list[dict]) -> list[dict]:
     return results
 
 
-def rank_candidates(claim: str, candidates: list[dict], researchtools_url: str = None) -> list[dict]:
-    """Rank candidate markets by relevance to the claim using LLM re-ranking."""
+def rank_candidates(claim: str, candidates: list[dict],
+                    all_claims: list[str] = None,
+                    researchtools_url: str = None) -> list[dict]:
+    """Rank candidate markets by relevance to the claim using LLM re-ranking.
+
+    Args:
+        claim: Primary claim to rank against.
+        candidates: List of candidate markets with slug, title, description.
+        all_claims: Additional claims for richer context (passed to LLM).
+        researchtools_url: Override for the researchtoolspy API URL.
+    """
     if not candidates:
         return []
 
@@ -80,6 +93,10 @@ def rank_candidates(claim: str, candidates: list[dict], researchtools_url: str =
         ],
     }
 
+    # Pass additional claims for context
+    if all_claims:
+        payload['claims'] = all_claims[:10]
+
     try:
         resp = requests.post(
             f"{url}/api/tools/claim-match",
@@ -95,4 +112,4 @@ def rank_candidates(claim: str, candidates: list[dict], researchtools_url: str =
 
     except requests.RequestException as e:
         print(f"  Warning: LLM ranking unavailable ({e}), using keyword fallback.")
-        return _keyword_fallback(claim, candidates)
+        return _keyword_fallback(claim, candidates, all_claims)

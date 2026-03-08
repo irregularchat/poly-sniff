@@ -130,10 +130,16 @@ def run_search(args: argparse.Namespace) -> None:
         print("\n  No matching markets found.")
         return
 
-    # 3. Rank candidates
+    # 3. Rank candidates — use best claim as primary, pass all for context
     primary_claim = args.claim or all_claims[0]
+    # If primary claim looks like garbage (too short, URL-like), try next one
+    if len(primary_claim) < 15 or primary_claim.startswith('http'):
+        for c in all_claims[1:]:
+            if len(c) >= 15 and not c.startswith('http'):
+                primary_claim = c
+                break
     print(f"\nRanking candidates by relevance...")
-    ranked = ranker.rank_candidates(primary_claim, candidates)
+    ranked = ranker.rank_candidates(primary_claim, candidates, all_claims=all_claims)
 
     # Build slug→candidate lookup for enrichment
     candidate_map = {c['slug']: c for c in candidates}
