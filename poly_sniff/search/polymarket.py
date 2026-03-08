@@ -1,38 +1,160 @@
 import re
 import requests
-from .config import POLYMARKET_GAMMA_API, MAX_CANDIDATES, RESEARCHTOOLS_URL
+from collections import Counter
+from .config import POLYMARKET_GAMMA_API, MAX_CANDIDATES
 
 
 SEARXNG_URL = 'https://search.irregularchat.com'
 
+# Words to strip from search queries
+_STOP_WORDS = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'will', 'be', 'been',
+               'being', 'have', 'has', 'had', 'do', 'does', 'did', 'to', 'of', 'in',
+               'for', 'on', 'with', 'at', 'by', 'from', 'that', 'this', 'it', 'and',
+               'or', 'but', 'not', 'if', 'so', 'can', 'could', 'would', 'should',
+               'their', 'they', 'its', 'his', 'her', 'our', 'your', 'who', 'what',
+               'which', 'when', 'where', 'how', 'than', 'then', 'also', 'into',
+               'about', 'after', 'before', 'between', 'under', 'over', 'through',
+               'first', 'time', 'early', 'late', 'very', 'just', 'more', 'most',
+               'some', 'any', 'each', 'every', 'showing', 'videos', 'close',
+               'reported', 'officials', 'according', 'said', 'says', 'told',
+               'next', 'month', 'year', 'day', 'week', 'following', 'due',
+               'currently', 'experience', 'affect', 'remain', 'residents',
+               'warned', 'possibility', 'potential', 'expected'}
+
+_ENTITY_NOISE = {'red', 'cross', 'crescent', 'society', 'organization', 'association',
+                 'department', 'ministry', 'office', 'bureau', 'committee', 'council',
+                 'group', 'force', 'forces', 'army', 'navy', 'military', 'police',
+                 'national', 'international', 'united', 'states', 'general', 'president',
+                 'prime', 'minister', 'secretary', 'director', 'chief', 'spokesman',
+                 'new', 'old', 'north', 'south', 'east', 'west', 'central',
+                 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+                 'january', 'february', 'march', 'april', 'may', 'june', 'july',
+                 'august', 'september', 'october', 'november', 'december'}
+
 
 def _extract_slug_from_url(url: str) -> str | None:
     """Extract event slug from a polymarket.com URL."""
-    match = re.search(r'polymarket\.com/(?:[a-z]{2}/)?event/([^/?#]+)', url)
+    match = re.search(r'polymarket\.com/(?:[a-z]{2}/)?(?:event|predictions)/([^/?#]+)', url)
     return match.group(1) if match else None
 
 
 def _to_search_query(claim: str, max_words: int = 8) -> str:
     """Extract key terms from a claim for search engine queries."""
-    stop_words = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'will', 'be', 'been',
-                  'being', 'have', 'has', 'had', 'do', 'does', 'did', 'to', 'of', 'in',
-                  'for', 'on', 'with', 'at', 'by', 'from', 'that', 'this', 'it', 'and',
-                  'or', 'but', 'not', 'if', 'so', 'can', 'could', 'would', 'should',
-                  'their', 'they', 'its', 'his', 'her', 'our', 'your', 'who', 'what',
-                  'which', 'when', 'where', 'how', 'than', 'then', 'also', 'into',
-                  'about', 'after', 'before', 'between', 'under', 'over', 'through',
-                  'first', 'time', 'early', 'late', 'very', 'just', 'more', 'most',
-                  'some', 'any', 'each', 'every', 'showing', 'videos', 'close',
-                  'reported', 'officials', 'according', 'said', 'says', 'told'}
     words = [w for w in re.sub(r'[^\w\s-]', '', claim).split()
-             if w.lower() not in stop_words and len(w) > 2]
+             if w.lower() not in _STOP_WORDS and len(w) > 2]
     return ' '.join(words[:max_words])
 
 
+def _extract_key_entities(text: str) -> list[str]:
+    """Extract key named entities (countries, cities, people) from text."""
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    all_words = []
+    for sent in sentences:
+        words = sent.split()
+        for w in words:
+            clean = re.sub(r"[^\w'-]", '', w)
+            if not clean or len(clean) < 3:
+                continue
+            if clean[0].isupper() and clean.lower() not in _STOP_WORDS and clean.lower() not in _ENTITY_NOISE:
+                # Normalize possessives: "Iran's" → "Iran"
+                clean = re.sub(r"'s$", '', clean)
+                all_words.append(clean)
+
+    counts = Counter(w.lower() for w in all_words)
+
+    seen = set()
+    result = []
+    for entity, _ in counts.most_common():
+        for w in all_words:
+            if w.lower() == entity and entity not in seen:
+                seen.add(entity)
+                result.append(w)
+                break
+
+    return result
+
+
+def _entities_to_tag_slugs(entities: list[str]) -> list[str]:
+    """Convert extracted entities to likely Polymarket tag slugs.
+
+    Polymarket uses lowercase hyphenated tag slugs like 'iran', 'israel',
+    'middle-east', 'ukraine', 'china', 'tariffs'.
+    """
+    tags = []
+    seen = set()
+    for entity in entities:
+        slug = entity.lower().replace(' ', '-').replace("'", '').replace('"', '')
+        if slug not in seen and len(slug) > 2:
+            seen.add(slug)
+            tags.append(slug)
+    return tags
+
+
+# ─── Gamma API tag-based search (primary, most reliable) ───
+
+def _search_via_gamma_tags(tag_slugs: list[str], limit: int = 20) -> list[dict]:
+    """Search Polymarket events by tag slugs via Gamma API.
+
+    This is the most reliable search method — Polymarket categorizes
+    events by topic tags like 'iran', 'israel', 'tariffs'.
+    """
+    seen_slugs = set()
+    candidates = []
+
+    for tag in tag_slugs:
+        try:
+            resp = requests.get(
+                f"{POLYMARKET_GAMMA_API}/events",
+                params={'tag_slug': tag, 'limit': limit},
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                continue
+
+            events = resp.json()
+            if not isinstance(events, list):
+                continue
+
+            for e in events:
+                slug = e.get('slug', '')
+                if not slug or slug in seen_slugs:
+                    continue
+                seen_slugs.add(slug)
+                candidates.append({
+                    'slug': slug,
+                    'title': e.get('title', ''),
+                    'description': (e.get('description', '') or '')[:500],
+                    'active': e.get('active'),
+                    'closed': e.get('closed'),
+                    'startDate': e.get('startDate'),
+                    'endDate': e.get('endDate'),
+                    'liquidity': e.get('liquidity'),
+                    'volume': e.get('volume'),
+                    'source': f'gamma-tag:{tag}',
+                    'markets': [
+                        {
+                            'slug': m.get('slug', slug),
+                            'question': m.get('question', ''),
+                            'outcomePrices': m.get('outcomePrices'),
+                        }
+                        for m in (e.get('markets') or [])
+                    ],
+                })
+
+                if len(candidates) >= MAX_CANDIDATES:
+                    return candidates
+
+        except requests.RequestException:
+            continue
+
+    return candidates
+
+
+# ─── SearXNG search (supplementary, intermittent) ───
+
 def _search_via_searxng(query: str, limit: int = 10) -> list[dict]:
-    """Search Polymarket via SearXNG for semantic matching."""
-    # Shorten long claims to key terms for better search results
-    search_q = _to_search_query(query) if len(query) > 60 else query
+    """Search Polymarket via SearXNG with 'polymarket' keyword."""
+    search_q = _to_search_query(query, max_words=6) if len(query) > 60 else query
     if not search_q.strip():
         search_q = query[:60]
 
@@ -40,7 +162,7 @@ def _search_via_searxng(query: str, limit: int = 10) -> list[dict]:
         resp = requests.get(
             f"{SEARXNG_URL}/search",
             params={
-                'q': f'{search_q} site:polymarket.com',
+                'q': f'polymarket {search_q}',
                 'format': 'json',
             },
             timeout=15,
@@ -59,7 +181,11 @@ def _search_via_searxng(query: str, limit: int = 10) -> list[dict]:
 
             candidates.append({
                 'slug': slug,
-                'title': r.get('title', '').replace(' | Polymarket', '').replace(' Predictions & Odds', '').strip(),
+                'title': r.get('title', '')
+                    .replace(' | Polymarket', '')
+                    .replace(' Predictions & Odds', '')
+                    .replace(' - Polymarket', '')
+                    .strip(),
                 'description': r.get('content', '')[:500],
                 'source': 'searxng',
                 'url': url,
@@ -74,6 +200,11 @@ def _enrich_from_gamma(candidates: list[dict]) -> list[dict]:
     """Enrich SearXNG candidates with Gamma API event data."""
     enriched = []
     for c in candidates:
+        # Skip if already has Gamma data (from tag search)
+        if c.get('source', '').startswith('gamma'):
+            enriched.append(c)
+            continue
+
         slug = c['slug']
         try:
             resp = requests.get(
@@ -110,69 +241,36 @@ def _enrich_from_gamma(candidates: list[dict]) -> list[dict]:
     return enriched
 
 
-def _search_via_gamma(query: str, limit: int = 10) -> list[dict]:
-    """Fallback: search directly via Gamma API."""
-    try:
-        resp = requests.get(
-            f"{POLYMARKET_GAMMA_API}/events",
-            params={
-                'title': query,
-                'closed': 'false',
-                'limit': limit,
-            },
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            return []
-
-        events = resp.json()
-        if not isinstance(events, list):
-            return []
-
-        return [
-            {
-                'slug': e.get('slug', ''),
-                'title': e.get('title', ''),
-                'description': (e.get('description', '') or '')[:500],
-                'active': e.get('active'),
-                'closed': e.get('closed'),
-                'startDate': e.get('startDate'),
-                'endDate': e.get('endDate'),
-                'liquidity': e.get('liquidity'),
-                'volume': e.get('volume'),
-                'source': 'gamma',
-                'markets': [
-                    {
-                        'slug': m.get('slug', e.get('slug', '')),
-                        'question': m.get('question', ''),
-                        'outcomePrices': m.get('outcomePrices'),
-                    }
-                    for m in (e.get('markets') or [])
-                ],
-            }
-            for e in events if e.get('slug')
-        ]
-    except requests.RequestException:
-        return []
-
-
-def _build_query_variants(claims: list[str]) -> list[str]:
-    """Generate multiple short query variants from claims for broader search coverage."""
+def _build_searxng_queries(claims: list[str]) -> list[str]:
+    """Generate SearXNG query variants from claims."""
     queries = []
     seen = set()
 
-    for claim in claims[:5]:
-        # The full keyword-extracted version
-        kw = _to_search_query(claim, max_words=6)
-        if kw and kw.lower() not in seen:
-            seen.add(kw.lower())
-            queries.append(kw)
+    def _add(q: str):
+        q = q.strip()
+        if q and q.lower() not in seen and len(q) > 3:
+            seen.add(q.lower())
+            queries.append(q)
 
-        # A shorter 3-4 word version for broader matches
-        short = _to_search_query(claim, max_words=4)
-        if short and short.lower() not in seen:
-            seen.add(short.lower())
-            queries.append(short)
+    # Extract entities
+    entities = _extract_key_entities(' '.join(claims))
+    if len(entities) >= 2:
+        _add(' '.join(entities[:3]))
+
+    # Suggested_market questions
+    for claim in claims:
+        if claim.startswith('Will ') or '?' in claim:
+            _add(_to_search_query(claim, max_words=5))
+        if len(queries) >= 6:
+            break
+
+    # Regular claims
+    for claim in claims[:5]:
+        if claim.startswith('Will ') or '?' in claim:
+            continue
+        _add(_to_search_query(claim, max_words=4))
+        if len(queries) >= 8:
+            break
 
     return queries[:8]
 
@@ -180,42 +278,48 @@ def _build_query_variants(claims: list[str]) -> list[str]:
 def search_markets(claims: list[str], limit_per_query: int = 10) -> list[dict]:
     """Search Polymarket for markets matching the given claims.
 
-    Uses SearXNG for semantic search, then enriches with Gamma API data.
-    Falls back to Gamma API directly if SearXNG is unavailable.
+    Strategy:
+    1. Extract entities from claims → search via Gamma tag_slug (most reliable)
+    2. Supplement with SearXNG keyword search (intermittent but broader)
+    3. Merge and deduplicate results
     """
     seen_slugs = set()
     candidates = []
-    searxng_ok = False
 
-    # Primary: SearXNG semantic search with multiple query variants
-    queries = _build_query_variants(claims)
-    for query in queries:
+    # 1. PRIMARY: Entity-based tag search via Gamma API
+    entities = _extract_key_entities(' '.join(claims))
+    tag_slugs = _entities_to_tag_slugs(entities)
+
+    if tag_slugs:
+        print(f"  entity tags  : {', '.join(tag_slugs[:6])}")
+        tag_results = _search_via_gamma_tags(tag_slugs[:6])
+        for c in tag_results:
+            if c['slug'] not in seen_slugs:
+                seen_slugs.add(c['slug'])
+                candidates.append(c)
+        if tag_results:
+            print(f"  gamma tags   : {len(tag_results)} events")
+
+    # 2. SUPPLEMENT: SearXNG keyword search
+    searxng_queries = _build_searxng_queries(claims)
+    searxng_count = 0
+    for query in searxng_queries:
         results = _search_via_searxng(query, limit=limit_per_query)
-        if results:
-            searxng_ok = True
         for c in results:
             if c['slug'] not in seen_slugs:
                 seen_slugs.add(c['slug'])
                 candidates.append(c)
+                searxng_count += 1
             if len(candidates) >= MAX_CANDIDATES:
                 break
         if len(candidates) >= MAX_CANDIDATES:
             break
 
-    # Enrich SearXNG results with Gamma API data
-    if candidates:
-        print(f"  searxng hits  : {len(candidates)}")
+    if searxng_count > 0:
+        print(f"  searxng      : +{searxng_count} additional")
+        # Enrich SearXNG-only results with Gamma data
         candidates = _enrich_from_gamma(candidates)
-
-    # Fallback: Gamma API direct search if SearXNG returned nothing
-    if not searxng_ok:
-        print(f"  searxng       : unavailable, using Gamma API fallback")
-        for claim in claims[:3]:
-            for c in _search_via_gamma(claim, limit=limit_per_query):
-                if c['slug'] not in seen_slugs:
-                    seen_slugs.add(c['slug'])
-                    candidates.append(c)
-                if len(candidates) >= MAX_CANDIDATES:
-                    break
+    elif not candidates:
+        print(f"  search       : no results from tags or SearXNG")
 
     return candidates
