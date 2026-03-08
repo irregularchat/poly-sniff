@@ -135,6 +135,9 @@ def run_search(args: argparse.Namespace) -> None:
     print(f"\nRanking candidates by relevance...")
     ranked = ranker.rank_candidates(primary_claim, candidates)
 
+    # Build slug→candidate lookup for enrichment
+    candidate_map = {c['slug']: c for c in candidates}
+
     # 4. Filter by min relevance
     min_rel = args.min_relevance or DEFAULT_MIN_RELEVANCE
     filtered = [r for r in ranked if r.get('relevance', 0) >= min_rel]
@@ -153,19 +156,31 @@ def run_search(args: argparse.Namespace) -> None:
     print(f"  Top {len(display)} matches for: \"{primary_claim}\"")
     print(f"{'='*80}\n")
 
+    def _market_status(slug: str) -> str:
+        c = candidate_map.get(slug, {})
+        if c.get('closed') is True:
+            return 'Resolved'
+        if c.get('active') is True:
+            return 'Active'
+        if c.get('active') is False:
+            return 'Inactive'
+        return '—'
+
     table_data = []
     for i, r in enumerate(display, 1):
+        slug = r.get('slug', '')
         table_data.append([
             i,
             r.get('relevance', 0),
-            r.get('title', '')[:60],
-            r.get('slug', ''),
-            (r.get('reasoning', '') or '')[:40],
+            _market_status(slug),
+            r.get('title', '')[:55],
+            slug,
+            (r.get('reasoning', '') or '')[:35],
         ])
 
     print(tabulate(
         table_data,
-        headers=['#', 'Relevance', 'Market', 'Slug', 'Reasoning'],
+        headers=['#', 'Rel', 'Status', 'Market', 'Slug', 'Reasoning'],
         tablefmt='simple',
     ))
 

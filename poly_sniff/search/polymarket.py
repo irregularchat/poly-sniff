@@ -66,6 +66,8 @@ def _enrich_from_gamma(candidates: list[dict]) -> list[dict]:
                     c.update({
                         'title': event.get('title', c['title']),
                         'description': (event.get('description', '') or '')[:500] or c.get('description', ''),
+                        'active': event.get('active'),
+                        'closed': event.get('closed'),
                         'startDate': event.get('startDate'),
                         'endDate': event.get('endDate'),
                         'liquidity': event.get('liquidity'),
@@ -110,6 +112,8 @@ def _search_via_gamma(query: str, limit: int = 10) -> list[dict]:
                 'slug': e.get('slug', ''),
                 'title': e.get('title', ''),
                 'description': (e.get('description', '') or '')[:500],
+                'active': e.get('active'),
+                'closed': e.get('closed'),
                 'startDate': e.get('startDate'),
                 'endDate': e.get('endDate'),
                 'liquidity': e.get('liquidity'),
