@@ -350,84 +350,80 @@ def _get_ai_search(claims: list[str]) -> dict:
 def search_markets(claims: list[str], limit_per_query: int = 10) -> list[dict]:
     """Search Polymarket for markets matching the given claims.
 
-    Strategy:
-    1. Extract entities from claims → search via Gamma tag_slug (most reliable)
-    2. AI-generated smart tags → Gamma tag_slug (optional, needs OPENAI_API_KEY)
-    3. Supplement with SearXNG keyword search (intermittent but broader)
-    4. Merge and deduplicate results
+    AI-heavy strategy (when OPENAI_API_KEY available):
+    1. AI generates tags + bettor-oriented phrases (PRIMARY)
+    2. AI tags → Gamma tag_slug search (broad discovery)
+    3. AI phrases → SearXNG search (nuanced discovery)
+    4. Entity extraction tags → Gamma (fallback/supplement)
+    5. SearXNG keyword search (final supplement)
+
+    Without AI:
+    1. Entity extraction tags → Gamma
+    2. SearXNG keyword search
     """
     seen_slugs = set()
     candidates = []
 
-    # 1. PRIMARY: Entity-based tag search via Gamma API
-    entities = _extract_key_entities(' '.join(claims))
-    tag_slugs = _entities_to_tag_slugs(entities)
-
-    if tag_slugs:
-        print(f"  entity tags  : {', '.join(tag_slugs[:6])}")
-        tag_results = _search_via_gamma_tags(tag_slugs[:6])
-        for c in tag_results:
-            if c['slug'] not in seen_slugs:
-                seen_slugs.add(c['slug'])
-                candidates.append(c)
-        if tag_results:
-            print(f"  gamma tags   : {len(tag_results)} events")
-
-    # 2. AI SMART SEARCH: GPT-generated tags + specific search phrases (optional)
-    ai_search = _get_ai_search(claims)
-    ai_tags = ai_search.get('tags', [])
-    ai_phrases = ai_search.get('phrases', [])
-
-    # Search new tags we haven't already searched
-    new_ai_tags = [t for t in ai_tags if t not in set(tag_slugs)]
-    if new_ai_tags:
-        ai_results = _search_via_gamma_tags(new_ai_tags[:4])
-        ai_count = 0
-        for c in ai_results:
-            if c['slug'] not in seen_slugs:
-                seen_slugs.add(c['slug'])
-                candidates.append(c)
-                ai_count += 1
-        if ai_count:
-            print(f"  ai discovery : +{ai_count} new events")
-
-    # Search AI-generated specific phrases via SearXNG
-    if ai_phrases:
-        ai_searx_count = 0
-        for phrase in ai_phrases[:5]:
-            results = _search_via_searxng(phrase, limit=5)
-            for c in results:
-                if c['slug'] not in seen_slugs:
-                    seen_slugs.add(c['slug'])
-                    candidates.append(c)
-                    ai_searx_count += 1
-                if len(candidates) >= MAX_CANDIDATES:
-                    break
-            if len(candidates) >= MAX_CANDIDATES:
-                break
-        if ai_searx_count:
-            print(f"  ai phrases   : +{ai_searx_count} via search")
-
-    # 3. SUPPLEMENT: SearXNG keyword search
-    searxng_queries = _build_searxng_queries(claims)
-    searxng_count = 0
-    for query in searxng_queries:
-        results = _search_via_searxng(query, limit=limit_per_query)
+    def _add_candidates(results: list[dict]) -> int:
+        count = 0
         for c in results:
             if c['slug'] not in seen_slugs:
                 seen_slugs.add(c['slug'])
                 candidates.append(c)
-                searxng_count += 1
+                count += 1
             if len(candidates) >= MAX_CANDIDATES:
                 break
+        return count
+
+    # 1. AI SMART SEARCH (primary when available)
+    ai_search = _get_ai_search(claims)
+    ai_tags = ai_search.get('tags', [])
+    ai_phrases = ai_search.get('phrases', [])
+    searched_tags = set()
+
+    if ai_tags:
+        # Search ALL AI tags via Gamma (up to 8)
+        ai_tag_results = _search_via_gamma_tags(ai_tags[:8])
+        ai_count = _add_candidates(ai_tag_results)
+        searched_tags.update(ai_tags[:8])
+        if ai_count:
+            print(f"  ai tags      : {ai_count} events from {', '.join(ai_tags[:8])}")
+
+    # 2. AI PHRASES → SearXNG (nuanced, bettor-oriented search)
+    if ai_phrases:
+        ai_searx_count = 0
+        for phrase in ai_phrases[:8]:
+            results = _search_via_searxng(phrase, limit=8)
+            ai_searx_count += _add_candidates(results)
+            if len(candidates) >= MAX_CANDIDATES:
+                break
+        if ai_searx_count:
+            print(f"  ai phrases   : +{ai_searx_count} via search ({', '.join(ai_phrases[:4])})")
+
+    # 3. ENTITY EXTRACTION (supplement / fallback if no AI)
+    entities = _extract_key_entities(' '.join(claims))
+    tag_slugs = _entities_to_tag_slugs(entities)
+    new_entity_tags = [t for t in tag_slugs if t not in searched_tags]
+
+    if new_entity_tags:
+        entity_results = _search_via_gamma_tags(new_entity_tags[:6])
+        entity_count = _add_candidates(entity_results)
+        if entity_count:
+            print(f"  entity tags  : +{entity_count} from {', '.join(new_entity_tags[:6])}")
+
+    # 4. SEARXNG KEYWORD SEARCH (final supplement)
+    searxng_queries = _build_searxng_queries(claims)
+    searxng_count = 0
+    for query in searxng_queries:
+        results = _search_via_searxng(query, limit=limit_per_query)
+        searxng_count += _add_candidates(results)
         if len(candidates) >= MAX_CANDIDATES:
             break
 
     if searxng_count > 0:
         print(f"  searxng      : +{searxng_count} additional")
-        # Enrich SearXNG-only results with Gamma data
         candidates = _enrich_from_gamma(candidates)
     elif not candidates:
-        print(f"  search       : no results from tags or SearXNG")
+        print(f"  search       : no results found")
 
     return candidates

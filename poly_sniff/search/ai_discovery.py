@@ -36,7 +36,7 @@ def _get_client():
     return OpenAI(api_key=api_key)
 
 
-def _chat(client, prompt: str, max_tokens: int = 2000) -> str:
+def _chat(client, prompt: str, max_tokens: int = 4000) -> str:
     """Send a chat completion request, trying gpt-5-mini then falling back.
 
     GPT-5-mini is a reasoning model that consumes tokens on internal thinking.
@@ -136,9 +136,10 @@ I need two things to find related Polymarket prediction markets:
 1. TAGS: Polymarket uses topic tag slugs like: iran, israel, tariffs, china,
 trump, ukraine, bitcoin, fed-rate, elections, supreme-court, nato, oil,
 russia, ai, tech, crypto, middle-east, military, war, sanctions, etc.
-Give me 3-6 relevant tag slugs.
+Give me 5-8 relevant tag slugs. Include both obvious and tangential tags
+(e.g., an Iran war article → iran, military, war, middle-east, oil, sanctions, us-military, nato).
 
-2. PHRASES: Give me 3-5 search phrases (2-4 words each) that a BETTOR on
+2. PHRASES: Give me 5-8 search phrases (2-4 words each) that a BETTOR on
 Polymarket would use to find prediction markets related to this article.
 Do NOT use article-specific details (video titles, school names, memes).
 Instead, think about the UNDERLYING geopolitical/economic events and
@@ -241,7 +242,7 @@ Example:
 No explanations, just NUMBER: SCORE lines."""
 
     t0 = time.time()
-    result = _chat(client, prompt, max_tokens=500)
+    result = _chat(client, prompt, max_tokens=2000)
     elapsed = time.time() - t0
 
     # Parse scores
