@@ -337,7 +337,10 @@ def _get_ai_search(claims: list[str]) -> dict:
     try:
         from .ai_discovery import generate_ai_search
         return generate_ai_search(claims)
-    except (ImportError, ValueError):
+    except ImportError:
+        return {}
+    except ValueError as e:
+        print(f"  ai search    : skipped ({e})")
         return {}
     except Exception as e:
         print(f"  ai search    : unavailable ({e})")
