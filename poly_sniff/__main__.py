@@ -150,6 +150,12 @@ def run_search(args: argparse.Namespace) -> None:
             print(f"  Best match: {ranked[0].get('title', '?')} ({ranked[0].get('relevance', 0)}%)")
         return
 
+    # Fetch prices if --confidence
+    prices = {}
+    if args.confidence:
+        from .search import polymarket as pm
+        prices = pm.fetch_market_prices(candidates)
+
     print(f"\n{'='*80}")
     print(f"  Top {len(display)} matches for: \"{primary_claim}\"")
     print(f"{'='*80}\n")
@@ -164,46 +170,80 @@ def run_search(args: argparse.Namespace) -> None:
             return 'Inactive'
         return '—'
 
+    def _is_active(slug: str) -> bool:
+        c = candidate_map.get(slug, {})
+        return c.get('active') is True and c.get('closed') is not True
+
+    # Determine which markets to sniff
+    sniff_results = {}
+    sniff_slugs = []
+
+    if args.sniff:
+        sniff_slugs = [r.get('slug') for r in display if _is_active(r.get('slug', ''))]
+    elif args.analyze:
+        print("  Note: --analyze is deprecated, use --sniff to analyze all matches.")
+        top_slug = display[0].get('slug', '') if display else ''
+        if top_slug and _is_active(top_slug):
+            sniff_slugs = [top_slug]
+
+    if sniff_slugs:
+        print(f"\nSniffing {len(sniff_slugs)} active market(s) for insider patterns...\n")
+        for i, slug in enumerate(sniff_slugs, 1):
+            print(f"  [{i}/{len(sniff_slugs)}] {slug}...")
+            result = sniff_market(slug, verbose=True)
+            if result:
+                sniff_results[slug] = result
+
+    # Build table
+    headers = ['#', 'Rel', 'Status']
+    if args.confidence:
+        headers.extend(['Price', '24h Δ'])
+    if sniff_results:
+        headers.extend(['Signal', 'Flagged'])
+    headers.extend(['Market', 'Slug', 'Reasoning'])
+
     table_data = []
     for i, r in enumerate(display, 1):
         slug = r.get('slug', '')
-        table_data.append([
-            i,
-            r.get('relevance', 0),
-            _market_status(slug),
-            r.get('title', '')[:55],
-            slug,
-            (r.get('reasoning', '') or '')[:35],
+        row = [i, r.get('relevance', 0), _market_status(slug)]
+
+        if args.confidence:
+            p = prices.get(slug, {})
+            price_val = p.get('price')
+            if price_val is not None and _is_active(slug):
+                row.append(f"{price_val:.0%}")
+            else:
+                row.append('—')
+            row.append('—')  # 24h delta placeholder
+
+        if sniff_results:
+            sr = sniff_results.get(slug)
+            if sr:
+                row.append(sr['signal']['signal_level'])
+                row.append(f"{sr['flagged_count']}/{sr['holder_count']}")
+            else:
+                row.append('—')
+                row.append('—')
+
+        row.extend([
+            r.get('title', '')[:45],
+            slug[:35],
+            (r.get('reasoning', '') or '')[:30],
         ])
+        table_data.append(row)
 
-    print(tabulate(
-        table_data,
-        headers=['#', 'Rel', 'Status', 'Market', 'Slug', 'Reasoning'],
-        tablefmt='simple',
-    ))
+    print()
+    print(tabulate(table_data, headers=headers, tablefmt='simple'))
 
-    # 6. Auto-analyze top match if requested
-    if args.analyze and display:
-        top_slug = display[0].get('slug', '')
-        if top_slug:
-            print(f"\n{'─'*80}")
-            print(f"  Auto-analyzing top match: {top_slug}")
-            print(f"{'─'*80}")
-            args.market_slug = top_slug
-            args.resolved_outcome = None
-            args.position_side = config.POSITION_SIDE
-            args.limit = config.SCRAPER_LIMIT
-            args.late_window = config.LATE_WINDOW_HOURS
-            args.min_directional = config.MIN_DIRECTIONAL
-            args.min_dominant = config.MIN_DOMINANT
-            args.max_conviction = config.MAX_CONVICTION
-            args.min_late_volume = config.MIN_LATE_VOLUME
-            args.export_all = False
-            args.export_profiles = False
-            args.export_transactions = False
-            args.export_scaffold = False
-            args.export_flagged = False
-            run_analyze(args)
+    # Print detail sections for markets with flagged users
+    if sniff_results:
+        for slug, sr in sniff_results.items():
+            if sr['flagged_count'] > 0:
+                print(f"\n{'─'*80}")
+                print(f"  {slug} — {sr['flagged_count']} flagged user(s)  "
+                      f"[Signal: {sr['signal']['signal_level']}]")
+                print(f"{'─'*80}")
+                output.print_table(sr['flagged_df'])
 
 
 def main() -> None:
@@ -285,9 +325,19 @@ def main() -> None:
         help='URL to extract claims from via researchtoolspy',
     )
     search_parser.add_argument(
+        '--sniff', '-s',
+        action='store_true',
+        help='Run insider analysis across all matched active markets',
+    )
+    search_parser.add_argument(
+        '--confidence',
+        action='store_true',
+        help='Show price and behavioral signal columns for active markets',
+    )
+    search_parser.add_argument(
         '--analyze', '-a',
         action='store_true',
-        help='Automatically run insider analysis on the top matching market',
+        help='(Deprecated: use --sniff) Analyze top match only',
     )
     search_parser.add_argument(
         '--top-n', '-n',
@@ -303,9 +353,65 @@ def main() -> None:
     )
     search_parser.set_defaults(func=run_search)
 
+    # --- scan subcommand ---
+    scan_parser = subparsers.add_parser('scan', help='Scan topic areas for behavioral anomalies')
+    scan_parser.add_argument(
+        '--tags', '-t',
+        help='Comma-separated Polymarket tag slugs (e.g., iran,tariffs,china)',
+    )
+    scan_parser.add_argument(
+        '--markets', '-m',
+        help='Comma-separated market slugs to scan directly',
+    )
+    scan_parser.add_argument(
+        '--min-volume',
+        type=float,
+        default=config.SCAN_MIN_VOLUME,
+        help=f'Skip markets below this USDC volume (default: {config.SCAN_MIN_VOLUME})',
+    )
+    scan_parser.add_argument(
+        '--max-markets',
+        type=int,
+        default=config.SCAN_MAX_MARKETS,
+        help=f'Maximum markets to analyze (default: {config.SCAN_MAX_MARKETS})',
+    )
+    scan_parser.add_argument(
+        '--limit',
+        type=int,
+        default=config.SCRAPER_LIMIT,
+        help='Number of top position holders to scrape per market (default: 20)',
+    )
+    scan_parser.add_argument(
+        '--min-directional',
+        type=float,
+        default=config.MIN_DIRECTIONAL,
+        help='Minimum userDirectionalConsistency to flag',
+    )
+    scan_parser.add_argument(
+        '--min-dominant',
+        type=float,
+        default=config.MIN_DOMINANT,
+        help='Minimum userDominantSideRatio to flag',
+    )
+    scan_parser.add_argument(
+        '--max-conviction',
+        type=float,
+        default=config.MAX_CONVICTION,
+        help='Maximum userPriceConvictionScore to flag',
+    )
+    scan_parser.add_argument(
+        '--min-late-volume',
+        type=float,
+        default=config.MIN_LATE_VOLUME,
+        help='Minimum lateVolumeRatio to flag',
+    )
+
+    from .scan import run_scan
+    scan_parser.set_defaults(func=run_scan)
+
     # Support legacy `poly_sniff <slug>` syntax by inserting 'analyze' if first arg
     # doesn't match a known subcommand or flag
-    if len(sys.argv) > 1 and sys.argv[1] not in ('analyze', 'search', '-h', '--help'):
+    if len(sys.argv) > 1 and sys.argv[1] not in ('analyze', 'search', 'scan', '-h', '--help'):
         sys.argv.insert(1, 'analyze')
 
     args = parser.parse_args()
