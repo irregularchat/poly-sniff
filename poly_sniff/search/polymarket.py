@@ -275,6 +275,63 @@ def _build_searxng_queries(claims: list[str]) -> list[str]:
     return queries[:8]
 
 
+def fetch_market_prices(candidates: list[dict]) -> dict[str, dict]:
+    """Fetch current prices for candidate markets from Gamma API.
+
+    Returns dict keyed by slug with 'price' (current Yes probability)
+    and 'price_24h_ago' (for delta computation, None if unavailable).
+    """
+    import json as _json
+
+    prices = {}
+    for c in candidates:
+        slug = c.get('slug', '')
+        if not slug:
+            continue
+
+        # Try to get price from already-fetched market data
+        markets = c.get('markets', [])
+        if markets:
+            try:
+                outcome_prices = markets[0].get('outcomePrices')
+                if outcome_prices:
+                    if isinstance(outcome_prices, str):
+                        outcome_prices = _json.loads(outcome_prices)
+                    if isinstance(outcome_prices, list) and len(outcome_prices) >= 1:
+                        prices[slug] = {
+                            'price': float(outcome_prices[0]),
+                            'price_24h_ago': None,
+                        }
+                        continue
+            except (ValueError, IndexError, KeyError):
+                pass
+
+        # Fallback: fetch from Gamma API
+        try:
+            resp = requests.get(
+                f"{POLYMARKET_GAMMA_API}/markets",
+                params={'slug': slug, 'limit': 1},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data and isinstance(data, list):
+                    market = data[0]
+                    outcome_prices = market.get('outcomePrices')
+                    if outcome_prices:
+                        if isinstance(outcome_prices, str):
+                            outcome_prices = _json.loads(outcome_prices)
+                        if isinstance(outcome_prices, list) and len(outcome_prices) >= 1:
+                            prices[slug] = {
+                                'price': float(outcome_prices[0]),
+                                'price_24h_ago': None,
+                            }
+        except requests.RequestException:
+            pass
+
+    return prices
+
+
 def search_markets(claims: list[str], limit_per_query: int = 10) -> list[dict]:
     """Search Polymarket for markets matching the given claims.
 
