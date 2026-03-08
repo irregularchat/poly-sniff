@@ -11,15 +11,7 @@ from .data import loader, preprocessing, scraper
 from .metrics import activity, conviction, directional, dominance, timing
 from . import scaffold as scaffold_module
 from . import output
-
-
-def _merge(transactions_df: pd.DataFrame, metric_df: pd.DataFrame) -> pd.DataFrame:
-    """Drop pre-existing metric columns then left-merge metric_df by proxyWallet."""
-    new_cols = [c for c in metric_df.columns if c != 'proxyWallet']
-    transactions_df.drop(
-        columns=[c for c in new_cols if c in transactions_df.columns], inplace=True
-    )
-    return transactions_df.merge(metric_df, on='proxyWallet', how='left')
+from .sniff import _merge, sniff_market
 
 
 def run_analyze(args: argparse.Namespace) -> None:
