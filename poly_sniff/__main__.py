@@ -118,9 +118,18 @@ def run_search(args: argparse.Namespace) -> None:
     candidates = polymarket.search_markets(all_claims)
     print(f"  candidates   : {len(candidates)}")
 
-    if not candidates:
+    if not candidates and not getattr(args, 'discovery_test', False):
         print("\n  No matching markets found.")
         return
+
+    # 2b. Run AI discovery comparison if requested
+    if getattr(args, 'discovery_test', False):
+        from .search import ai_discovery
+        _title = url_data['title'] if args.url else ''
+        ai_discovery.run_comparison(all_claims, title=_title,
+                                    existing_candidates=candidates)
+        if not candidates:
+            return
 
     # 3. Rank candidates — use best claim as primary, pass all for context
     primary_claim = args.claim or all_claims[0]
@@ -354,6 +363,11 @@ def main() -> None:
         type=int,
         default=50,
         help='Minimum relevance score to display (0-100, default: 50)',
+    )
+    search_parser.add_argument(
+        '--discovery-test',
+        action='store_true',
+        help='Run AI discovery strategy comparison (requires openai + OPENAI_API_KEY)',
     )
     search_parser.set_defaults(func=run_search)
 
