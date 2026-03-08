@@ -52,10 +52,10 @@ poly_sniff <market_slug> [options]
 | `--position-side` | `Yes` | Which side's top position holders to scrape. |
 | `--limit` | `20` | Number of top position holders to scrape. |
 | `--late-window` | `24` | Hours before resolution that count as "late" trading. |
-| `--min-directional` | `0.85` | Minimum userDirectionalConsistency to flag. |
-| `--min-dominant` | `0.90` | Minimum userDominantSideRatio to flag. |
-| `--max-conviction` | `0` | Maximum userPriceConvictionScore to flag. |
-| `--min-late-volume` | `0.50` | Minimum lateVolumeRatio to flag. |
+| `--min-directional` | `0.85` | Minimum Directional Consistency to flag. |
+| `--min-dominant` | `0.90` | Minimum Dominant Side Ratio to flag. |
+| `--max-conviction` | `0` | Maximum Price ConvictionS core to flag. |
+| `--min-late-volume` | `0.50` | Minimum Late Volume Ratio to flag. |
 | `--export-profiles` | — | Export user profiles to `profiles.xlsx`. |
 | `--export-transactions` | — | Export transaction data to `transactions.xlsx`. |
 | `--export-scaffold` | — | Export hourly scaffold to `scaffold.xlsx`. |
